@@ -348,12 +348,19 @@ def analyze_case(query: str, role: str, language: str,
                  gender: str = "", religion: str = "") -> str:
     """
     Send query + history to Groq and return structured legal analysis.
-    gender / religion are optional — pass empty string to skip context.
+    API key loaded from st.secrets (Streamlit Cloud) with .env fallback (local dev).
     Returns a user-friendly error string on any failure - never raises.
     """
-    api_key = os.getenv("GROQ_API_KEY", "").strip()
+    # Streamlit Cloud: use st.secrets; local dev: fall back to .env via os.getenv
+    try:
+        import streamlit as st
+        api_key = st.secrets.get("GROQ_API_KEY", "").strip()
+    except Exception:
+        api_key = ""
+    if not api_key:
+        api_key = os.getenv("GROQ_API_KEY", "").strip()
     if not api_key or api_key == "your_actual_api_key_here":
-        return "Warning: API key missing. Please configure GROQ_API_KEY in the .env file."
+        return "Warning: API key missing. Add GROQ_API_KEY to st.secrets or .env file."
 
     messages = build_messages(query, history or [], role, language, gender, religion)
 
@@ -362,8 +369,9 @@ def analyze_case(query: str, role: str, language: str,
         response = client.chat.completions.create(
             model="llama-3.1-8b-instant",
             messages=messages,
-            temperature=0.5,   # higher = more varied output for different inputs
+            temperature=0.5,
             max_tokens=2500,
+            timeout=30,        # prevent indefinite hang on slow/dropped connections
         )
         return response.choices[0].message.content
 
@@ -375,4 +383,6 @@ def analyze_case(query: str, role: str, language: str,
             return "Warning: Rate limit reached. Please wait a moment and try again."
         if "503" in err or "unavailable" in err.lower():
             return "Warning: Groq service is temporarily unavailable. Please try again shortly."
+        if "timeout" in err.lower() or "timed out" in err.lower():
+            return "Warning: Request timed out. Please try again."
         return f"Error: Unexpected error: {err}"

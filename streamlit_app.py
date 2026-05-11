@@ -567,6 +567,10 @@ if user_input and user_input.strip() and not st.session_state._processing:
 
     st.session_state.messages.append({"role": "assistant", "content": response})
 
+    # Trim session history to last 20 messages to prevent unbounded memory growth
+    if len(st.session_state.messages) > 20:
+        st.session_state.messages = st.session_state.messages[-20:]
+
     if not response.startswith(("Warning:", "Error:")):
         try:
             save_case(query, response, role, language)
