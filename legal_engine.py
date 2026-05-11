@@ -4,12 +4,8 @@ Uses Groq (LLaMA 3.1) with agent-style chain-of-thought prompt engineering.
 """
 
 import os
-from pathlib import Path
 from groq import Groq
-from dotenv import load_dotenv
 from translation import get_language_instruction
-
-load_dotenv(dotenv_path=Path(__file__).parent / ".env")
 
 # ── Role-specific system personas ─────────────────────────────────────────────
 SYSTEM_PERSONAS = {
