@@ -129,6 +129,67 @@ legal advice and no verdict is implied.*
 # Max past messages sent as context (8 = 4 exchanges)
 MAX_HISTORY = 8
 
+# Minimum word count below which a query is considered too vague for full analysis
+_VAGUE_THRESHOLD = 12
+
+# Keywords that are commonly typed alone as vague topic labels
+_VAGUE_KEYWORDS = {
+    "rape", "murder", "assault", "theft", "fraud", "divorce", "property",
+    "harassment", "dowry", "kidnapping", "accident", "cheating", "bail",
+    "custody", "maintenance", "defamation", "blackmail", "extortion",
+}
+
+
+def is_vague_query(query: str) -> bool:
+    """
+    Return True if the query is too vague to analyse without more facts.
+    Criteria: fewer than _VAGUE_THRESHOLD words AND no sentence-level detail
+    (i.e. no verb phrases, no named parties, no evidence mentioned).
+    """
+    words = query.strip().split()
+    if len(words) >= _VAGUE_THRESHOLD:
+        return False   # long enough — treat as detailed
+
+    # Check if it is just a topic label (e.g. "rape case", "murder")
+    lower = query.lower()
+    for kw in _VAGUE_KEYWORDS:
+        if kw in lower and len(words) <= 5:
+            return True
+
+    # Short query with no verb indicators — likely a topic label
+    verb_indicators = [" was ", " is ", " has ", " have ", " did ", " were ",
+                       " filed ", " accused ", " alleged ", " happened ",
+                       " occurred ", " reported ", " committed ",
+                       "assault", "provocation", "harassment", "abuse",
+                       "stole", "attacked", "threatened", "injured",
+                       "harassed", "abused", "cheated", "murdered", "killed",
+                       "raped", "kidnapped", "blackmailed", "defrauded"]
+    has_verb = any(v in lower for v in verb_indicators)
+    return not has_verb
+
+
+# Prompt used when the query is vague — asks for facts instead of assuming them
+CLARIFICATION_PROMPT = """\
+The user has provided a very brief or vague query without enough factual detail \
+to perform a proper legal analysis.
+
+Do NOT assume, invent, or fill in any facts.
+Do NOT generate a full legal analysis based on a topic label alone.
+
+Instead, respond with a short, friendly message that:
+1. Acknowledges the topic they mentioned.
+2. Explains that you need more details to give an accurate analysis.
+3. Asks 3 specific clarifying questions relevant to that topic, such as:
+   - Who are the parties involved?
+   - What specific incident or event occurred?
+   - Is there any evidence or witness available?
+   - When and where did this happen?
+   - Has a complaint or FIR been filed?
+
+Keep the response concise (5-8 lines). Do not use the 7-section format.
+Maintain a neutral, professional, and supportive tone.
+"""
+
 
 def _build_context_clause(gender: str, religion: str) -> str:
     """
@@ -226,13 +287,16 @@ def _get_system_prompt(role: str, language: str, has_history: bool,
         f"For follow-up questions, answer concisely and reference prior context.\n"
         f"4. {lang_instruction}\n"
         f"5. If the query is not related to law, politely redirect the user.\n"
+        f"6. NEVER assume, invent, or fill in facts that are not explicitly stated by the user. "
+        f"If the query lacks sufficient detail, ask clarifying questions instead of generating analysis.\n"
         f"{context_rule}"
         f"{context_clause}"
     )
 
 
 def build_messages(query: str, history: list, role: str, language: str,
-                   gender: str = "", religion: str = "") -> list:
+                   gender: str = "", religion: str = "",
+                   vague: bool = False) -> list:
     """
     Build the full messages list:
       [system] + [last MAX_HISTORY messages] + [current user query]
@@ -249,6 +313,12 @@ def build_messages(query: str, history: list, role: str, language: str,
         trimmed = trimmed[1:]
 
     user_content = (
+        # ── Vague query: ask for clarification, never assume facts ────────────
+        f"{get_language_instruction(language)}\n\n"
+        f"User query: {query}\n\n"
+        f"{CLARIFICATION_PROMPT}"
+        if vague and not has_history else
+        # ── Normal first query: full structured analysis ───────────────────
         f"LANGUAGE REQUIREMENT: {get_language_instruction(language)}\n\n"
         f"Case Scenario:\n{query}\n\n"
         f"User Context:\n"
@@ -358,7 +428,8 @@ def analyze_case(query: str, role: str, language: str,
     if not api_key or api_key == "your_actual_api_key_here":
         return "Warning: API key missing. Add GROQ_API_KEY to st.secrets or .env file."
 
-    messages = build_messages(query, history or [], role, language, gender, religion)
+    messages = build_messages(query, history or [], role, language, gender, religion,
+                               vague=is_vague_query(query))
 
     try:
         client   = Groq(api_key=api_key)
